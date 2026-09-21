@@ -178,6 +178,18 @@ impl CockatielClient {
         let mut config = CockatielConfig::load_or_create(&config_path);
         let mut changed = false;
 
+        // PIN delivery: an injected env var (set by the supervisor) wins over
+        // the config file, so the PIN never has to travel on the command line
+        // (visible in `ps`). `--pin` on argv remains a manual-run override.
+        if let Ok(pin_env) = std::env::var("COCKATIEL_PIN") {
+            if let Ok(pin) = pin_env.parse() {
+                if config.pin != pin {
+                    config.pin = pin;
+                    changed = true;
+                }
+            }
+        }
+
         // Apply CLI overrides: --ip, --port, --pin, --name
         let args: Vec<String> = std::env::args().collect();
         let mut i = 1;
