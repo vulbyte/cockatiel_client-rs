@@ -178,7 +178,7 @@ impl CockatielClient {
         let mut config = CockatielConfig::load_or_create(&config_path);
         let mut changed = false;
 
-        // Apply CLI overrides: --ip, --port, --pin
+        // Apply CLI overrides: --ip, --port, --pin, --name
         let args: Vec<String> = std::env::args().collect();
         let mut i = 1;
         while i < args.len() {
@@ -195,6 +195,13 @@ impl CockatielClient {
             } else if (args[i] == "--pin") && i + 1 < args.len() {
                 if let Ok(pin) = args[i + 1].parse() {
                     config.pin = pin;
+                    changed = true;
+                }
+                i += 2;
+            } else if (args[i] == "--name" || args[i] == "-n") && i + 1 < args.len() {
+                let name = args[i + 1].clone();
+                if !name.trim().is_empty() {
+                    config.module_name = name.trim().to_string();
                     changed = true;
                 }
                 i += 2;
