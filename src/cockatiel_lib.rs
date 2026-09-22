@@ -30,6 +30,7 @@ pub struct CockatielConfig {
     pub ip: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default, skip_serializing_if = "is_zero_pin")]
     pub pin: i32,
     pub module_name: String,
     #[serde(default = "default_position")]
@@ -51,6 +52,10 @@ fn default_priority() -> u32 {
     100
 }
 
+fn is_zero_pin(pin: &i32) -> bool {
+    *pin == 0
+}
+
 impl CockatielConfig {
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> Self {
         if let Ok(file_content) = fs::read_to_string(&path) {
@@ -66,7 +71,6 @@ impl CockatielConfig {
                         .or_insert_with(|| serde_json::json!(default_ip()));
                     obj.entry("port".to_string())
                         .or_insert_with(|| serde_json::json!(default_port()));
-                    obj.entry("pin".to_string()).or_insert_with(|| serde_json::json!(0));
                     obj.entry("module_name".to_string())
                         .or_insert_with(|| serde_json::json!("unnamed_module"));
                     obj.entry("position".to_string())
@@ -181,11 +185,13 @@ impl CockatielClient {
         // PIN delivery: an injected env var (set by the supervisor) wins over
         // the config file, so the PIN never has to travel on the command line
         // (visible in `ps`). `--pin` on argv remains a manual-run override.
+        // The env PIN is never persisted back into config.json — the PIN does
+        // not live in config files (they're gitignored, but a stale pin in one
+        // must not shadow the injected value either).
         if let Ok(pin_env) = std::env::var("COCKATIEL_PIN") {
             if let Ok(pin) = pin_env.parse() {
                 if config.pin != pin {
                     config.pin = pin;
-                    changed = true;
                 }
             }
         }
@@ -245,7 +251,6 @@ impl CockatielClient {
                 let obj = root.as_object_mut().unwrap();
                 obj.insert("ip".to_string(), serde_json::json!(config.ip));
                 obj.insert("port".to_string(), serde_json::json!(config.port));
-                obj.insert("pin".to_string(), serde_json::json!(config.pin));
                 obj.insert("module_name".to_string(), serde_json::json!(config.module_name));
                 obj.insert("position".to_string(), serde_json::json!(config.position));
                 obj.insert("priority".to_string(), serde_json::json!(config.priority));
