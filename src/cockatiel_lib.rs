@@ -389,9 +389,14 @@ impl CockatielClient {
             auth_token: self.auth_token.clone(),
             module_name: self.config.module_name.clone(),
             module_instance_uuid7: self.instance_uuid7.clone(),
-            payload: Some(Payload::Log(Log {
-                log: format!("{} reconnected", self.config.module_name),
-                blob: vec![],
+            // The engine gates the first frame on ANY fresh socket to a
+            // ConnectionRequest, so the reauth carries one; the JWT in
+            // auth_token is what re-authenticates (pin is ignored).
+            payload: Some(Payload::ConnectionRequest(ConnectionRequest {
+                pin: 0,
+                process_position: self.config.position,
+                priority: self.config.priority,
+                module_instance_uuid7: self.instance_uuid7.clone(),
             })),
         };
 
