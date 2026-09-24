@@ -3,11 +3,13 @@ use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
+    connect_async, connect_async_tls_with_config, tungstenite::protocol::Message, MaybeTlsStream,
+    WebSocketStream,
 };
 use uuid::Uuid;
 
@@ -409,26 +411,72 @@ impl CockatielClient {
     // ── Internal helpers ───────────────────────────────────────────────
 
     async fn connect_ws(url: &str) -> Result<WsStream, String> {
-        let max_attempts = 60;
-        let mut attempt = 0;
+    // WSS is chosen when the supervisor points us at the engine's self-signed
+    // certificate via COCKATIEL_TLS_CERT. That cert is PINNED as the trust
+    // root — a self-signed engine cert would never pass webpki-roots, and we
+    // deliberately don't accept arbitrary certs.
+    let (scheme, connector): (&str, Option<tokio_tungstenite::Connector>) =
+        match std::env::var("COCKATIEL_TLS_CERT") {
+            Ok(path) if !path.trim().is_empty() => {
+                let cfg = Self::pinned_tls_config(&path)?;
+                ("wss", Some(tokio_tungstenite::Connector::Rustls(Arc::new(cfg))))
+            }
+            _ => ("ws", None),
+        };
+    let hostport = url
+        .strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("wss://"))
+        .unwrap_or(url);
+    let url = format!("{}://{}", scheme, hostport);
 
-        loop {
-            attempt += 1;
-            match connect_async(url).await {
-                Ok((ws_stream, _)) => return Ok(ws_stream),
-                Err(e) => {
-                    if attempt >= max_attempts {
-                        return Err(format!("Failed to connect after {} attempts: {}", max_attempts, e));
-                    }
-                    eprintln!(
-                        "[cockatiel] Connection failed (attempt {}/{}): {}. Retrying in 5s...",
-                        attempt, max_attempts, e
-                    );
-                    sleep(Duration::from_secs(5)).await;
+    let max_attempts = 60;
+    let mut attempt = 0;
+
+    loop {
+        attempt += 1;
+        let result = match &connector {
+            Some(c) => {
+                connect_async_tls_with_config(&url, None, false, Some(c.clone())).await
+            }
+            None => connect_async(&url).await,
+        };
+        match result {
+            Ok((ws_stream, _)) => return Ok(ws_stream),
+            Err(e) => {
+                if attempt >= max_attempts {
+                    return Err(format!("Failed to connect after {} attempts: {}", max_attempts, e));
                 }
+                eprintln!(
+                    "[cockatiel] Connection failed (attempt {}/{}): {}. Retrying in 5s...",
+                    attempt, max_attempts, e
+                );
+                sleep(Duration::from_secs(5)).await;
             }
         }
     }
+}
+
+/// Build a rustls client config that trusts exactly the engine's self-signed
+/// certificate (cert pinning). Any other chain is rejected.
+fn pinned_tls_config(cert_pem_path: &str) -> Result<rustls::ClientConfig, String> {
+    let cert_bytes = std::fs::read(cert_pem_path).map_err(|e| format!("read TLS cert {}: {}", cert_pem_path, e))?;
+    let mut reader = std::io::BufReader::new(cert_bytes.as_slice());
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("parse TLS cert: {}", e))?;
+    if certs.is_empty() {
+        return Err(format!("no certificate found in {}", cert_pem_path));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for c in certs {
+        roots
+            .add(c)
+            .map_err(|e| format!("pinning TLS cert failed: {}", e))?;
+    }
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
+}
 
     async fn send_raw(ws: &mut WsStream, container: &Container) -> Result<(), String> {
         let mut buf = Vec::new();
