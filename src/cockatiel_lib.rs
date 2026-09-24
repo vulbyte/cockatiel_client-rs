@@ -459,6 +459,10 @@ impl CockatielClient {
 /// Build a rustls client config that trusts exactly the engine's self-signed
 /// certificate (cert pinning). Any other chain is rejected.
 fn pinned_tls_config(cert_pem_path: &str) -> Result<rustls::ClientConfig, String> {
+    // rustls 0.23 requires a process-level CryptoProvider. Install the aws_lc_rs
+    // provider once (idempotent) so `ClientConfig::builder()` doesn't panic with
+    // "could not automatically determine the process-level CryptoProvider".
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let cert_bytes = std::fs::read(cert_pem_path).map_err(|e| format!("read TLS cert {}: {}", cert_pem_path, e))?;
     let mut reader = std::io::BufReader::new(cert_bytes.as_slice());
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
