@@ -19,7 +19,8 @@ use uuid::Uuid;
 pub use cockatiel_proto::proto;
 pub use cockatiel_proto::PromptKind;
 
-use proto::container::Payload;
+use proto::container_for_engine::Payload as EnginePayload;
+use proto::container_for_module::Payload as ModulePayload;
 use proto::*;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -270,12 +271,12 @@ impl CockatielClient {
         // ── Phase 1: Connect + send ConnectionRequest ──────────────────
         let mut ws = Self::connect_ws(&ws_url).await?;
 
-        let connection_request = Container {
-            version: 1,
+        let connection_request = ContainerForEngine {
+            version: 2,
             auth_token: String::new(),
             module_name: config.module_name.clone(),
             module_instance_uuid7: Uuid::now_v7().to_string(),
-            payload: Some(Payload::ConnectionRequest(ConnectionRequest {
+            payload: Some(EnginePayload::ConnectionRequest(ConnectionRequest {
                 pin: config.pin,
                 process_position: config.position,
                 priority: config.priority,
@@ -289,7 +290,7 @@ impl CockatielClient {
         let response = Self::receive_raw(&mut ws, 15000).await?;
 
         let (auth_token, assigned_uuid) = match response.payload {
-            Some(Payload::ConnectionRequestReturn(ret)) => {
+            Some(ModulePayload::ConnectionRequestReturn(ret)) => {
                 if ret.new_port == 0 && !response.auth_token.is_empty() {
                     (response.auth_token, ret.module_instance_uuid7)
                 } else if ret.new_port == 0 && response.auth_token.is_empty() {
@@ -324,9 +325,9 @@ impl CockatielClient {
     }
 
     /// Send a payload to the engine. Automatically includes auth_token and instance_uuid7.
-    pub async fn send(&mut self, payload: Payload) -> Result<(), String> {
-        let container = Container {
-            version: 1,
+    pub async fn send(&mut self, payload: EnginePayload) -> Result<(), String> {
+        let container = ContainerForEngine {
+            version: 2,
             auth_token: self.auth_token.clone(),
             module_name: self.config.module_name.clone(),
             module_instance_uuid7: self.instance_uuid7.clone(),
@@ -337,7 +338,7 @@ impl CockatielClient {
     }
 
     /// Receive the next Container from the engine.
-    pub async fn receive(&mut self) -> Option<Container> {
+    pub async fn receive(&mut self) -> Option<ContainerForModule> {
         match Self::receive_raw(&mut self.stream, u64::MAX).await {
             Ok(container) => self.maybe_answer_probe(container).await,
             Err(_) => None,
@@ -345,7 +346,7 @@ impl CockatielClient {
     }
 
     /// Receive with a timeout in milliseconds.
-    pub async fn receive_timeout(&mut self, timeout_ms: u64) -> Result<Container, String> {
+    pub async fn receive_timeout(&mut self, timeout_ms: u64) -> Result<ContainerForModule, String> {
         let container = Self::receive_raw(&mut self.stream, timeout_ms).await?;
         match self.maybe_answer_probe(container).await {
             Some(c) => Ok(c),
@@ -356,14 +357,14 @@ impl CockatielClient {
     /// Transparently answer the engine's liveness probes: an incoming
     /// `AuthVerify` is a request to prove we're alive, so reply with our
     /// current auth token (which the engine verifies) and keep reading.
-    async fn maybe_answer_probe(&mut self, container: Container) -> Option<Container> {
-        if matches!(container.payload, Some(Payload::AuthVerify(_))) {
-            let reply = Container {
-                version: 1,
+    async fn maybe_answer_probe(&mut self, container: ContainerForModule) -> Option<ContainerForModule> {
+        if matches!(container.payload, Some(ModulePayload::AuthVerify(_))) {
+            let reply = ContainerForEngine {
+                version: 2,
                 auth_token: self.auth_token.clone(),
                 module_name: self.config.module_name.clone(),
                 module_instance_uuid7: self.instance_uuid7.clone(),
-                payload: Some(Payload::AuthVerify(AuthVerify {
+                payload: Some(EnginePayload::AuthVerify(AuthVerify {
                     cur_auth: self.auth_token.clone(),
                 })),
             };
@@ -386,15 +387,15 @@ impl CockatielClient {
 
         let mut ws = Self::connect_ws(&ws_url).await?;
 
-        let reauth = Container {
-            version: 1,
+        let reauth = ContainerForEngine {
+            version: 2,
             auth_token: self.auth_token.clone(),
             module_name: self.config.module_name.clone(),
             module_instance_uuid7: self.instance_uuid7.clone(),
             // The engine gates the first frame on ANY fresh socket to a
             // ConnectionRequest, so the reauth carries one; the JWT in
             // auth_token is what re-authenticates (pin is ignored).
-            payload: Some(Payload::ConnectionRequest(ConnectionRequest {
+            payload: Some(EnginePayload::ConnectionRequest(ConnectionRequest {
                 pin: 0,
                 process_position: self.config.position,
                 priority: self.config.priority,
@@ -482,7 +483,7 @@ fn pinned_tls_config(cert_pem_path: &str) -> Result<rustls::ClientConfig, String
         .with_no_client_auth())
 }
 
-    async fn send_raw(ws: &mut WsStream, container: &Container) -> Result<(), String> {
+    async fn send_raw(ws: &mut WsStream, container: &ContainerForEngine) -> Result<(), String> {
         let mut buf = Vec::new();
         container
             .encode(&mut buf)
@@ -492,11 +493,11 @@ fn pinned_tls_config(cert_pem_path: &str) -> Result<rustls::ClientConfig, String
             .map_err(|e| format!("Send error: {}", e))
     }
 
-    async fn receive_raw(ws: &mut WsStream, timeout_ms: u64) -> Result<Container, String> {
+    async fn receive_raw(ws: &mut WsStream, timeout_ms: u64) -> Result<ContainerForModule, String> {
         let result = tokio::time::timeout(Duration::from_millis(timeout_ms), ws.next()).await;
         match result {
             Ok(Some(Ok(Message::Binary(data)))) => {
-                Container::decode(data.as_ref()).map_err(|e| format!("Decode error: {}", e))
+                ContainerForModule::decode(data.as_ref()).map_err(|e| format!("Decode error: {}", e))
             }
             Ok(Some(Ok(Message::Close(_)))) => Err("Connection closed by server".into()),
             Ok(Some(Ok(_))) => Err("Received non-binary message".into()),

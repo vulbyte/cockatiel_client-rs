@@ -1,4 +1,4 @@
-use cockatiel_client::proto::container::Payload;
+use cockatiel_client::proto::container_for_module::Payload;
 use cockatiel_client::CockatielClient;
 
 #[tokio::main]
