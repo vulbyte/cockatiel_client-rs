@@ -15,7 +15,7 @@ name = "cockatiel-client"
 path = "src/main.rs"
 
 [dependencies]
-cockatiel-proto = { git = "https://github.com/vulbyte/cockatiel_proto", rev = "7df084933dc4a1b736b17348da7ade5df6104ead" }
+cockatiel-proto = { git = "https://github.com/vulbyte/cockatiel_proto", rev = "add269d583155fbb7764a6e76f1a86af4c97765e" }
 tokio = { version = "1.38", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = "0.23"
